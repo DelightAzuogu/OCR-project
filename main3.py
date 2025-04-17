@@ -120,7 +120,7 @@ checkpoint = ModelCheckpoint(
 )
 
 # === TRAIN MODEL ===
-EPOCHS = 100
+EPOCHS = 50
 
 history = model.fit(
     train_dataset,
