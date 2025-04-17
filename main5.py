@@ -3,6 +3,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 import pandas as pd
 import tensorflow as tf
+from sklearn.model_selection import train_test_split
 from tensorflow.keras import layers, models, regularizers
 from tensorflow.keras.callbacks import ReduceLROnPlateau, ModelCheckpoint, EarlyStopping
 
@@ -49,6 +50,11 @@ def process_image(file_path, label):
 train_image_paths = train_df['image'].tolist()
 train_labels = train_df['label_encoded'].tolist()
 
+# Split training data to create a validation set
+train_paths, val_paths, train_labels, val_labels = train_test_split(
+    train_image_paths, train_labels, test_size=0.2, random_state=42
+)
+
 # === PREPARE TEST DATA ===
 test_image_paths = test_df['image'].tolist()
 test_labels = test_df['label_encoded'].tolist()
@@ -57,8 +63,12 @@ test_labels = test_df['label_encoded'].tolist()
 BATCH_SIZE = 20
 
 # Training dataset
-train_dataset = tf.data.Dataset.from_tensor_slices((train_image_paths, train_labels))
+train_dataset = tf.data.Dataset.from_tensor_slices((train_paths, train_labels))
 train_dataset = train_dataset.map(process_image).shuffle(1000).batch(BATCH_SIZE)
+
+# Validation dataset (from training data)
+val_dataset = tf.data.Dataset.from_tensor_slices((val_paths, val_labels))
+val_dataset = val_dataset.map(process_image).batch(BATCH_SIZE)
 
 # Test dataset (from dataset.csv)
 test_dataset = tf.data.Dataset.from_tensor_slices((test_image_paths, test_labels))
@@ -82,9 +92,9 @@ model = models.Sequential([
     layers.MaxPooling2D((2, 2)),
     layers.BatchNormalization(),
 
-    layers.Conv2D(256, (3, 3), activation='relu', kernel_regularizer=regularizers.l2(0.01)),
-    layers.MaxPooling2D((2, 2)),
-    layers.BatchNormalization(),
+    # layers.Conv2D(256, (3, 3), activation='relu', kernel_regularizer=regularizers.l2(0.01)),
+    # layers.MaxPooling2D((2, 2)),
+    # layers.BatchNormalization(),
 
     layers.Flatten(),
     layers.Dropout(0.5),
@@ -109,11 +119,24 @@ model.compile(
 )
 
 # === CALLBACKS ===
-# Note: Without validation data, we can't use validation-based callbacks
-# Using only learning rate scheduler
+reduce_lr = ReduceLROnPlateau(
+    monitor='val_loss',
+    factor=0.2,
+    patience=5,
+    min_lr=1e-6,
+    verbose=0
+)
+
+early_stopping = EarlyStopping(
+    monitor='val_loss',
+    patience=15,
+    restore_best_weights=True,
+    verbose=0
+)
+
 checkpoint = ModelCheckpoint(
     'best_model.h5',
-    monitor='accuracy',
+    monitor='val_accuracy',
     save_best_only=True,
     mode='max',
     verbose=0
@@ -124,8 +147,9 @@ EPOCHS = 100
 
 history = model.fit(
     train_dataset,
+    validation_data=val_dataset,
     epochs=EPOCHS,
-    callbacks=[lr_callback, checkpoint],
+    callbacks=[lr_callback, reduce_lr, early_stopping, checkpoint],
     verbose=1
 )
 
@@ -143,6 +167,7 @@ try:
 
     plt.subplot(1, 2, 1)
     plt.plot(history.history['accuracy'], label='Train Accuracy')
+    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
     plt.title('Model Accuracy')
     plt.xlabel('Epoch')
     plt.ylabel('Accuracy')
@@ -150,6 +175,7 @@ try:
 
     plt.subplot(1, 2, 2)
     plt.plot(history.history['loss'], label='Train Loss')
+    plt.plot(history.history['val_loss'], label='Validation Loss')
     plt.title('Model Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
