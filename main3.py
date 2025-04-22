@@ -1,10 +1,11 @@
 import os
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # Suppress TensorFlow logs
 
 import pandas as pd
 import tensorflow as tf
+import json
 from tensorflow.keras import layers, models, regularizers
-from tensorflow.keras.callbacks import ReduceLROnPlateau, ModelCheckpoint, EarlyStopping
+from tensorflow.keras.callbacks import LearningRateScheduler, ModelCheckpoint
 
 # Configure GPU memory growth (optional)
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -13,25 +14,27 @@ if physical_devices:
 
 # === LOAD AND ENCODE DATA ===
 train_csv_path = "train.csv"
-test_csv_path = "dataset.csv"
-
 train_df = pd.read_csv(train_csv_path)
-test_df = pd.read_csv(test_csv_path)
 
-# Combine unique characters from both datasets to ensure consistent encoding
-all_chars = set(train_df['label'].unique()).union(set(test_df['label'].unique()))
-unique_chars = sorted(list(all_chars))
+# Get unique characters for encoding
+unique_chars = sorted(list(set(train_df['label'].unique())))
 
 char_to_num = {char: idx for idx, char in enumerate(unique_chars)}
-num_to_char = {idx: char for char, idx in char_to_num.items()}  # for decoding
+num_to_char = {idx: char for char, idx in char_to_num.items()}
 
-# Add encoded label column to both dataframes
+# Save character mappings to JSON file
+with open('char_mappings.json', 'w') as f:
+    json.dump({
+        'char_to_num': char_to_num,
+        'num_to_char': num_to_char
+    }, f, indent=4)
+
+# Add encoded label column to dataframe
 train_df['label_encoded'] = train_df['label'].map(char_to_num)
-test_df['label_encoded'] = test_df['label'].map(char_to_num)
 
 # Image size config
-IMG_HEIGHT = 64
-IMG_WIDTH = 64
+IMG_HEIGHT = 60
+IMG_WIDTH = 40
 
 # === IMAGE PROCESSING FUNCTION ===
 def process_image(file_path, label):
@@ -49,20 +52,12 @@ def process_image(file_path, label):
 train_image_paths = train_df['image'].tolist()
 train_labels = train_df['label_encoded'].tolist()
 
-# === PREPARE TEST DATA ===
-test_image_paths = test_df['image'].tolist()
-test_labels = test_df['label_encoded'].tolist()
-
-# === CREATE DATASETS ===
+# === CREATE DATASET ===
 BATCH_SIZE = 20
 
 # Training dataset
 train_dataset = tf.data.Dataset.from_tensor_slices((train_image_paths, train_labels))
 train_dataset = train_dataset.map(process_image).shuffle(1000).batch(BATCH_SIZE)
-
-# Test dataset (from dataset.csv)
-test_dataset = tf.data.Dataset.from_tensor_slices((test_image_paths, test_labels))
-test_dataset = test_dataset.map(process_image).batch(BATCH_SIZE)
 
 # === DEFINE CNN MODEL ===
 num_classes = len(char_to_num)
@@ -70,22 +65,22 @@ num_classes = len(char_to_num)
 model = models.Sequential([
     layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 1)),
 
-    layers.Conv2D(32, (3, 3), activation='relu', kernel_regularizer=regularizers.l2(0.01)),
+    # First block
+    layers.Conv2D(32, (3, 3), activation='relu', padding='same', kernel_regularizer=regularizers.l2(0.01)),
     layers.MaxPooling2D((2, 2)),
     layers.BatchNormalization(),
 
-    layers.Conv2D(64, (3, 3), activation='relu', kernel_regularizer=regularizers.l2(0.01)),
+    # Second block
+    layers.Conv2D(64, (3, 3), activation='relu', padding='same', kernel_regularizer=regularizers.l2(0.01)),
     layers.MaxPooling2D((2, 2)),
     layers.BatchNormalization(),
 
-    layers.Conv2D(128, (3, 3), activation='relu', kernel_regularizer=regularizers.l2(0.01)),
+    # Third block
+    layers.Conv2D(128, (3, 3), activation='relu', padding='same', kernel_regularizer=regularizers.l2(0.01)),
     layers.MaxPooling2D((2, 2)),
     layers.BatchNormalization(),
 
-    layers.Conv2D(256, (3, 3), activation='relu', kernel_regularizer=regularizers.l2(0.01)),
-    layers.MaxPooling2D((2, 2)),
-    layers.BatchNormalization(),
-
+    # Dense layers
     layers.Flatten(),
     layers.Dropout(0.5),
     layers.Dense(128, activation='relu'),
@@ -98,7 +93,7 @@ initial_learning_rate = 0.001
 def lr_schedule(epoch):
     return initial_learning_rate * (0.9 ** (epoch // 10))
 
-lr_callback = tf.keras.callbacks.LearningRateScheduler(lr_schedule)
+lr_callback = LearningRateScheduler(lr_schedule)
 optimizer = tf.keras.optimizers.Adam(learning_rate=initial_learning_rate)
 
 # === COMPILE MODEL ===
@@ -109,10 +104,8 @@ model.compile(
 )
 
 # === CALLBACKS ===
-# Note: Without validation data, we can't use validation-based callbacks
-# Using only learning rate scheduler
 checkpoint = ModelCheckpoint(
-    'best_model.h5',
+    'best_model11.h5',  # Still save h5 during training for checkpointing
     monitor='accuracy',
     save_best_only=True,
     mode='max',
@@ -122,6 +115,7 @@ checkpoint = ModelCheckpoint(
 # === TRAIN MODEL ===
 EPOCHS = 50
 
+print("Training model...")
 history = model.fit(
     train_dataset,
     epochs=EPOCHS,
@@ -129,11 +123,15 @@ history = model.fit(
     verbose=1
 )
 
-# === EVALUATE MODEL ON TEST SET ===
-print("\nEvaluating model on test dataset:")
-test_loss, test_accuracy = model.evaluate(test_dataset, verbose=1)
-print(f"Test accuracy: {test_accuracy:.4f}")
-print(f"Test loss: {test_loss:.4f}")
+# === SAVE MODEL AS PB FILE ===
+# First load the best model from checkpoint
+model.load_weights('best_model11.h5')
+
+# Save in TensorFlow SavedModel format (.pb)
+export_path = 'saved_model11'
+print(f"Exporting trained model to {export_path}")
+tf.saved_model.save(model, export_path)
+print(f"Model exported to: {export_path}")
 
 # Optional: Plot training history
 try:
