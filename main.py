@@ -4,7 +4,9 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import pandas as pd
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
-from tensorflow.keras import layers, models
+import keras
+from keras import layers, models
+import tensorflow as tf
 
 # Configure GPU memory growth (optional)
 physical_devices = tf.config.list_physical_devices('GPU')
